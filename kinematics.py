@@ -1,6 +1,7 @@
+from abc import ABC, abstractmethod
 from typing import Literal
 import numpy as np
-from numpy import cos, sin, atan2, sqrt
+from numpy import cos, ndarray, sin, atan2, sqrt
 
 class TMatrix:
 
@@ -18,9 +19,8 @@ class TMatrix:
         self.rotation = self.matrix[:3, :3]
 
 
-class Kinematics:
-
-    def __init__(self, th, *dh_parameters):
+class Kinematics(ABC):
+    def __init__(self, *dh_parameters):
         """
         Parameters
         ----------
@@ -28,31 +28,36 @@ class Kinematics:
             A three-tuple containing lists of a parameters, alpha parameters, and d parameters, in that order
         """
 
-        # TODO: Down the line, make this a 4 tuple and pass theta in too (I don't actually think that would be a good idea here)
         self.a, self.alpha, self.d = dh_parameters
-        self.th = th
-        # NOTE: This is always initialised by the subclass - I wonder if there's any way to make that more explicit...
-        self.max_robot_len = 1
+
+
+    @property
+    @abstractmethod
+    def max_robot_len(self) -> float:
+        """ Used to define maximum length of each axis on the plot """
+
         
+    @abstractmethod
     def solve_IK(self, o, R=None, elbow_up=True) -> tuple[Literal[True], list[float]] | tuple[Literal[False], str]:
         """ Solve the inverse kinematics problem """
-        raise NotImplemented
+        pass
 
-    def full_FK_pos(self, thetas) -> list[list]:
+    @abstractmethod
+    def full_FK_pos(self, thetas) -> ndarray:
         """ Provides the coordinates of every frame origin - used for plotting the robot arm """
-        raise NotImplemented
+        pass
 
+    @abstractmethod
     def end_effector_tmatrix(self, thetas) -> TMatrix:
         """ Alias for the final TMatrix  """
-        raise NotImplemented
+        pass
 
 
 class ElbowKinematics(Kinematics):
 
-    def __init__(self, th, *dh_parameters):
-        super().__init__(th, *dh_parameters)
-        # NOTE: For 5DOF, this is: self.max_robot_len = self.a[1]+self.a[2]+self.d[4]+20
-        self.max_robot_len = self.d[0]+self.a[1]+self.a[2]+20
+    def __init__(self, *dh_parameters):
+        super().__init__(*dh_parameters)
+
 
     def T01(self, th1: float) -> TMatrix:
         """ Calculate the T_0^1 transformation matrix """
@@ -84,13 +89,19 @@ class ElbowKinematics(Kinematics):
             [0,                     0,                      0,         1                                                           ]
         ]))
 
+    @property
+    def max_robot_len(self) -> float:
+        # NOTE: For 5DOF, this is: self.max_robot_len = self.a[1]+self.a[2]+self.d[4]+20
+        return self.d[0]+self.a[1]+self.a[2]+20
+
 
     def full_FK_pos(self, thetas):
-        return [
+        return np.array([
+            np.array([0, 0, 0]),
             self.T01(thetas[0]).position,
             self.T02(thetas[0], thetas[1]).position,
             self.T03(thetas[0], thetas[1], thetas[2]).position
-        ]
+        ])
 
     def end_effector_tmatrix(self, thetas):
         return self.T03(*thetas)
@@ -120,39 +131,29 @@ class ElbowKinematics(Kinematics):
             Given in radians.
         """
 
-        # TODO: Update this when changin to the full solution
+        #NOTE: The atan2 function is of the form atan2(y, x), not atan2(x, y) 
+        # In my opinion, that is backwards, but whatever
         oc = o #- d5*R[:,2] 
         # Singularity check: if xc and yc are both 0, then th1 is undefined, so just manually set th1 = 0 (as in a singular configuration, th1's value is irrelevant)
         if oc[0] == 0 and oc[1] == 0:
             th1 = 0
         else:
-            th1 = atan2(oc[0], oc[1])
+            th1 = atan2(oc[1], oc[0])
         # th2 is a function of th3, so have to declare them out of order
         D = (oc[0]**2 + oc[1]**2 + (oc[2] - self.d[0])**2 - self.a[1]**2 - self.a[2]**2)/(2*self.a[1]*self.a[2])
         # NOTE: Temp debug print
         print(f"D: {D}")
         if elbow_up:
-            th3 = atan2(D, sqrt(1 - D**2))
+            th3 = atan2(-sqrt(1 - D**2), D)
         else:
-            th3 = atan2(D, -sqrt(1 - D**2))
+            th3 = atan2(sqrt(1 - D**2), D)
         # NOTE: This check is kinda stupid - isn't atan2 bound between -pi and pi anyway?
-        if th3 < -np.pi or th3 > np.pi:
+        if th3 < -np.pi or th3 > np.pi or np.isnan(th3):
             return (False, "Theta 3 out of bounds")
-        th2 = atan2(sqrt(oc[0]**2 + oc[1]**2), oc[2] - self.d[0]) - atan2(self.a[1]+self.a[2]*cos(th3), self.a[2]*sin(th3))
-        if th2 < -np.pi or th2 > np.pi:
+        th2 = atan2(oc[2] - self.d[0], sqrt(oc[0]**2 + oc[1]**2)) - atan2(self.a[2]*sin(th3), self.a[1]+self.a[2]*cos(th3))
+        if th2 < -np.pi or th2 > np.pi or np.isnan(th2):
             return (False, "Theta 2 out of bounds")
 
-        print(f"IK: th1={th1}, th2={th2}, th3={th3}")
+        print(f"IK: th1={np.rad2deg(th1)}, th2={np.rad2deg(th2)}, th3={np.rad2deg(th3)}")
         return (True, [th1, th2, th3])
-
-
-
-
-
-
-
-
-
-
-
 
