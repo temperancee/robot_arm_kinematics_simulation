@@ -1,3 +1,4 @@
+from matplotlib import axes
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button
 import numpy as np
@@ -5,7 +6,7 @@ import kinematics
 
 class RobotArm:
     
-    def __init__(self, kinematics: kinematics.Kinematics):
+    def __init__(self, kinematics: kinematics.Kinematics, th: list[float]):
         """
         Parameters
         ----------
@@ -16,32 +17,51 @@ class RobotArm:
         # Save parameters
         self.kinematics = kinematics
 
-        self.th: list[float] = [0, np.pi/6, -np.pi/6]
-        # Initialise end effector position by running forward kinematics
-        self.end_effector_pos = self.kinematics.end_effector_tmatrix(self.th).position
+        self.th = th
+        # Initialise link positions and coordinate axes by running forward kinematics
         self.update_link_positions()
+        self.end_effector_pos = self.link_points[-1]
 
 
     def update_link_positions(self):
         # Specify the origins of the coordinate frames, given in terms of frame 0, when the robot is 
         # in the position drawn in the DH diagrams.
-        self.link_points = self.kinematics.full_FK_pos(self.th)
+        fk = self.kinematics.full_FK(self.th)
+        frame_axes = []
+        link_points = []
+        for tm in fk:
+            frame_axes.append(tm.rotation)
+            link_points.append(tm.position)
+        self.frame_axes = np.array(frame_axes)
+        self.link_points = np.array(link_points)
 
 
-    def set_end_effector_pos(self, x, y, z, elbow_up=True):
-        """ Updates the robot link configuration via inverse kinematics """
+    def set_end_effector_pos(self, x, y, z):
+        """
+        Updates the robot link configuration via inverse kinematics 
+
+        Compares the Euclidean distance between old and new thetas for  both sets of thetas returned from the IK function
+        (representing the elbow-up and elbow-down configurations) and sets theta to the closest configuration.
+        """
+        # TODO: The Euclidean distance didn't fix the issue - th1 still flips to 180 from 0 sometimes. We might want to
+        #       fix this by passing thetas to solve_IK() and then making a direct comparison 
 
         old_end_effector_pos = self.end_effector_pos
         self.end_effector_pos = [x, y, z]
-        # TODO: Clean up this error checking; it seems a bit grim
-        success, ret = self.kinematics.solve_IK(self.end_effector_pos, elbow_up=elbow_up)
+        success, result = self.kinematics.solve_IK(self.end_effector_pos)
         if not success:
-            print(f"ERROR: IK failed with {ret}")
+            print(f"ERROR: IK failed with {result}")
             self.end_effector_pos = old_end_effector_pos
         else:
-            self.th = ret # type: ignore # Annoyingly, the type checker can't see that ret must be of type list[float] in this section
+            # Compare Eucliean distances
+            if np.linalg.norm(np.array(result[0]) - np.array(self.th)) > np.linalg.norm(np.array(result[1]) - np.array(self.th)):
+                self.th = result[1]
+            else:
+                self.th = result[0]
             # Update the link positions via forward kinematics
-            self.link_points = self.kinematics.full_FK_pos(self.th)
+            print(f"IK: th1={np.rad2deg(self.th[0])}, th2={np.rad2deg(self.th[1])}, th3={np.rad2deg(self.th[2])}")
+            print(self.th)
+            self.update_link_positions()
 
 
 
@@ -65,13 +85,36 @@ class Plotter:
         self.coordinate_values = []
 
         # Create widgets
-        self._create_widgets()
+        self._draw_widgets()
 
         # Initial plot
         self.arm_plot = self.ax.plot3D(robot.link_points[:, 0], robot.link_points[:, 1], robot.link_points[:, 2])[0]
+        self.axes_plots = []
+        self.draw_frame_axes()
+        print(self.axes_plots)
+
+    def draw_frame_axes(self, initial=True):
+        """
+        This loops over all the frames and origins and draws the axes in x=red, y=green, z=blue
+        """
+
+        i=0
+        for frame, origin in zip(self.robot.frame_axes, self.robot.link_points):
+            for j, col in zip(range(3), ['red', 'green', 'blue']):
+                axis_line = np.array([
+                    origin,
+                    origin + 5*frame[:, j]
+                ])
+                print(origin + 5*frame[:, j])
+                if initial:
+                    self.axes_plots.append(self.ax.plot3D(axis_line[:, 0], axis_line[:, 1], axis_line[:, 2], color=col)[0])
+                else:
+                    self.axes_plots[i].set_data_3d(axis_line[:, 0], axis_line[:, 1], axis_line[:, 2])
+                    i+=1
 
 
-    def _create_widgets(self):
+
+    def _draw_widgets(self):
         """ 
         Creates buttons to control the end effector coordinates and update the plot via IK,
         and sliders to control the joint angles directly and update the plot via FK
@@ -122,6 +165,7 @@ class Plotter:
             self.coordinate_values[i].set_text(f"{value:.2f}")
 
         self.arm_plot.set_data_3d(self.robot.link_points[:, 0], self.robot.link_points[:, 1], self.robot.link_points[:, 2]) # type: ignore # This is not an error: upsettingly, due to the way Axes3D.plot/Axes3D.plot3D is written, type interface sees it as returning ArrayOf(Line2D), when actually, it returns ArrayOf(Line3D)
+        self.draw_frame_axes(initial=False)
         self.fig.canvas.draw_idle()
 
     def show(self):
@@ -165,7 +209,7 @@ class MoveAngle:
         Executes the given movement command by updating the robot accordingly, and plots the result on the figure
         """
         print(self.th_index)
-        self.robot.th[self.th_index] = np.deg2rad(self.plotter.sliders[self.th_index].val)
+        self.robot.th[self.th_index] = np.deg2rad(self.plotter.sliders[self.th_index].val) # type: ignore # Thinks robot.th can be a str due to the bad error handling in the RobotArm class
         print(self.robot.th[self.th_index])
         self.robot.update_link_positions()
         self.plotter.update_figure()
@@ -176,18 +220,28 @@ class MoveAngle:
 
 def main():
     """ ---- Run ---- """
-    d1 = 20
-    a2 = 20
-    a3 = 20
+    d1 = 30
+    a2 = 40
+    a3 = 40
     d5 = 15
-    # Probably more readable as a dict
-    dh_parameters = [
+    d6 = 15
+    # TODO: Probably more readable as a dict
+    elbow_dh_parameters = [
         [0, a2, a3], # a
         [0,  0,  0], # alpha
         [d1, 0,  0]  # d
     ]
-    elbow_kinematics = kinematics.ElbowKinematics(*dh_parameters)
-    robot = RobotArm(elbow_kinematics)
+    six_dof_dh_parameters = [
+        [0, a2, a3, 0, 0, 0], # a
+        [0,  0,  0, -np.pi/2, np.pi/2, 0], # alpha
+        [d1, 0,  0, 0, 0, d6]  # d
+    ]
+    # thetas: list[float] = [0, 0, 0]
+    thetas: list[float] = [0, 0, 0, 0, 0, 0]
+    # elbow_kinematics = kinematics.ElbowKinematics(*elbow_dh_parameters)
+    six_dof_kinematics = kinematics.SixDOFKinematics(*six_dof_dh_parameters)
+    # robot = RobotArm(elbow_kinematics, thetas)
+    robot = RobotArm(six_dof_kinematics, thetas)
     plotter = Plotter(robot)
     plotter.show()
 
