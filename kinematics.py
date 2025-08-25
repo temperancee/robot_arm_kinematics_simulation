@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Literal
+from typing import Any, Literal, override
 import numpy as np
 from numpy import cos, ndarray, sin, atan2, sqrt
 
@@ -29,6 +29,13 @@ class Kinematics(ABC):
         """
 
         self.a, self.alpha, self.d = dh_parameters
+        
+        self.T00 = TMatrix(np.array([
+            [1, 0, 0, 0],
+            [0, 1, 0, 0],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]
+        ]))
 
 
     @property
@@ -47,72 +54,51 @@ class Kinematics(ABC):
         """ Provides the transformation matrices for every frame - used for plotting the robot arm and frame coordinate axes """
         pass
 
-    @abstractmethod
-    def end_effector_tmatrix(self, thetas) -> TMatrix:
-        """ Alias for the final TMatrix  """
-        pass
+    def A(self, i: int, theta: float) -> TMatrix:
+        """
+        Returns the DH A_i matrix, that is, the TMatrix T^{i-1}_i.
+        Parameters
+        ----------
+        i: int
+            The subscript of the *matrix*, not the list that stores the DH parameters. That is, this is a 1-index, not a 0-index
+        theta: float
+            The theta for this matrix - should be theta_i (again, 1-indexed i, as in the maths)
+        """
 
+        return TMatrix(np.array([
+            [cos(theta),  -sin(theta)*cos(self.alpha[i-1]),  sin(theta)*sin(self.alpha[i-1]), self.a[i-1]*cos(theta)],
+            [sin(theta),   cos(theta)*cos(self.alpha[i-1]), -cos(theta)*sin(self.alpha[i-1]), self.a[i-1]*sin(theta)],
+            [         0,              sin(self.alpha[i-1]),             cos(self.alpha[i-1]),            self.d[i-1]],
+            [         0,                                 0,                                0,                      1]
+        ]))
+
+    def T01(self, th: int) -> TMatrix:
+        """ Calculate the T^0_1 matrix """
+        return self.A(1, th)
+
+    def T0i(self, i: int, th: float, prev_T: TMatrix) -> TMatrix:
+        """ Calculate the T^0_i transformation matrix for i>1 """
+
+        return TMatrix(np.matmul(prev_T.matrix, self.A(i, th).matrix))
 
 class ElbowKinematics(Kinematics):
 
     def __init__(self, *dh_parameters):
         super().__init__(*dh_parameters)
 
-    def T00(self) -> TMatrix:
-        """ Provide the T_0^0 transformation matrix (identity matrix) """
-        return TMatrix(np.array([
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1]
-        ]))
-
-    def T01(self, th1: float) -> TMatrix:
-        """ Calculate the T_0^1 transformation matrix """
-
-        return TMatrix(np.array([
-            [cos(th1), 0, sin(th1),  0 ],
-            [sin(th1), 0, -cos(th1), 0 ],
-            [0,        1, 0,         self.d[0]],
-            [0,        0, 0,         1 ]
-        ]))
-
-    def T02(self, th1, th2) -> TMatrix:
-        """ Calculate the T_0^2 transformation matrix """
-
-        return TMatrix(np.array([
-            [cos(th1)*cos(th2), -cos(th1)*sin(th2), sin(th1),  self.a[1]*cos(th1)*cos(th2)  ],
-            [sin(th1)*cos(th2), -sin(th1)*sin(th2), -cos(th1), self.a[1]*sin(th1)*cos(th2)  ],
-            [sin(th2),          cos(th2),           0,         self.a[1]*sin(th2)+self.d[0] ],
-            [0,                 0,                  0,         1                            ]
-        ]))
-
-    def T03(self, th1, th2, th3) -> TMatrix:
-        """ Calculate the T_0^3 transformation matrix """
-
-        return TMatrix(np.array([
-            [cos(th1)*cos(th2+th3), -cos(th1)*sin(th2+th3), sin(th1),  self.a[2]*cos(th1)*cos(th2+th3)+self.a[1]*cos(th1)*cos(th2) ],
-            [sin(th1)*cos(th2+th3), -sin(th1)*sin(th2+th3), -cos(th1), self.a[2]*sin(th1)*cos(th2+th3)+self.a[1]*sin(th1)*cos(th2) ],
-            [sin(th2+th3),          cos(th2+th3),           0,         self.a[2]*sin(th2+th3)+self.a[1]*sin(th2)+self.d[0]         ],
-            [0,                     0,                      0,         1                                                           ]
-        ]))
 
     @property
     def max_robot_len(self) -> float:
         # NOTE: For 5DOF, this is: self.max_robot_len = self.a[1]+self.a[2]+self.d[4]+20
-        return self.d[0]+self.a[1]+self.a[2]+20
+        return self.d[0]+self.a[1]+self.a[2]
 
 
-    def full_FK(self, thetas):
-        return np.array([
-            self.T00(),
-            self.T01(thetas[0]),
-            self.T02(thetas[0], thetas[1]),
-            self.T03(thetas[0], thetas[1], thetas[2])
-        ])
+    def full_FK(self, thetas) -> ndarray:
+        T01 = self.T01(thetas[0])
+        T02 = self.T0i(2, thetas[1], T01)
+        T03 = self.T0i(3, thetas[2], T02)
+        return np.array([self.T00, T01, T02, T03])
 
-    def end_effector_tmatrix(self, thetas):
-        return self.T03(*thetas)
 
     def solve_IK(self, o, R=None):
         # TODO: Add a parameter to toggle range checks
@@ -141,7 +127,7 @@ class ElbowKinematics(Kinematics):
 
         #NOTE: The atan2 function is of the form atan2(y, x), not atan2(x, y) 
         # In my opinion, that is backwards, but whatever
-        oc = o #- d5*R[:,2] 
+        oc = o
         # Singularity check: if xc and yc are both 0, then th1 is undefined, so just manually set th1 = 0 (as in a singular configuration, th1's value is irrelevant)
         if oc[0] == 0 and oc[1] == 0:
             th1 = 0
@@ -170,56 +156,20 @@ class SixDOFKinematics(ElbowKinematics):
     def __init__(self, *dh_parameters):
         super().__init__(*dh_parameters)
 
-
-    def T04(self, th1, th2, th3, th4) -> TMatrix:
-        """ Calculate the T_0^4 transformation matrix """
-
-        return TMatrix(np.array([
-            [cos(th1)*cos(th2+th3+th4),    -sin(th1), -cos(th1)*sin(th2+th3+th4), self.a[2]*cos(th1)*cos(th2+th3)+self.a[1]*cos(th1)*cos(th2) ],
-            [sin(th1)*cos(th2+th3+th4),     cos(th1), -sin(th1)*sin(th2+th3+th4), self.a[2]*sin(th1)*cos(th2+th3)+self.a[1]*sin(th1)*cos(th2) ],
-            [         sin(th2+th3+th4),            0,           cos(th2+th3+th4),         self.a[2]*sin(th2+th3)+self.a[1]*sin(th2)+self.d[0] ],
-            [                        0,            0,                          0,                                                           1 ]
-        ]))
-
-    def T05(self, th1, th2, th3, th4, th5) -> TMatrix:
-        """ Calculate the T_0^5 transformation matrix """
-
-        return TMatrix(np.array([
-            [cos(th1)*cos(th2+th3+th4)*cos(th5) - sin(th1)*sin(th5), -cos(th1)*sin(th2+th3+th4),    cos(th1)*cos(th2+th3+th4)*sin(th5) + sin(th1)*cos(th5), self.a[2]*cos(th1)*cos(th2+th3)+self.a[1]*cos(th1)*cos(th2) ],
-            [sin(th1)*cos(th2+th3+th4)*cos(th5) + cos(th1)*sin(th5), -sin(th1)*sin(th2+th3+th4),    sin(th1)*cos(th2+th3+th4)*sin(th5) - cos(th1)*cos(th5), self.a[2]*sin(th1)*cos(th2+th3)+self.a[1]*sin(th1)*cos(th2) ],
-            [                             sin(th2+th3+th4)*cos(th5),           cos(th2+th3+th4),                                                         0,         self.a[2]*sin(th2+th3)+self.a[1]*sin(th2)+self.d[0] ],
-            [                                                     0,                          0,                                                         0,                                                           1 ]
-        ]))
-
-    def T06(self, th1, th2, th3, th4, th5, th6) -> TMatrix:
-        """ Calculate the T_0^6 transformation matrix """
-
-        return TMatrix(np.array([
-            [cos(th6)*(cos(th1)*cos(th2+th3+th4)*cos(th5) - sin(th1)*sin(th5)) - cos(th1)*sin(th2+th3+th4)*sin(th6), -sin(th6)*(cos(th1)*cos(th2+th3+th4)*cos(th5) - sin(th1)*sin(th5)) - cos(th1)*sin(th2+th3+th4)*cos(th6),    cos(th1)*cos(th2+th3+th4)*sin(th5) + sin(th1)*cos(th5), self.a[2]*cos(th1)*cos(th2+th3)+self.a[1]*cos(th1)*cos(th2) + self.d[5]*(cos(th1)*cos(th2+th3+th4)*sin(th5) + sin(th1)*cos(th5)) ],
-            [cos(th6)*(sin(th1)*cos(th2+th3+th4)*cos(th5) + cos(th1)*sin(th5)) - sin(th1)*sin(th2+th3+th4)*sin(th6), -sin(th6)*(sin(th1)*cos(th2+th3+th4)*cos(th5) + cos(th1)*sin(th5)) - sin(th1)*sin(th2+th3+th4)*cos(th6),    sin(th1)*cos(th2+th3+th4)*sin(th5) - cos(th1)*cos(th5), self.a[2]*sin(th1)*cos(th2+th3)+self.a[1]*sin(th1)*cos(th2) + self.d[5]*(sin(th1)*cos(th2+th3+th4)*sin(th5) - cos(th1)*cos(th5)) ],
-            [                                        sin(th2+th3+th4)*cos(th5)*cos(th6) + cos(th2+th3+th4)*sin(th6),                                         -sin(th2+th3+th4)*cos(th5)*sin(th6) + cos(th2+th3+th4)*cos(th6),                                 sin(th2+th3+th4)*sin(th5),                                        self.a[2]*sin(th2+th3)+self.a[1]*sin(th2)+self.d[0] + self.d[5]*sin(th2+th3+th4)*sin(th5) ],
-            [                                                                                                     0,                                                                                                       0,                                                         0,                                                                                                                                1 ]
-        ]))
-
     @property
     def max_robot_len(self) -> float:
-        # NOTE: For 5DOF, this is: self.max_robot_len = self.a[1]+self.a[2]+self.d[4]+20
-        return self.d[0]+self.a[1]+self.a[2]+self.d[5]+20
+        return self.d[0]+self.a[1]+self.d[3]+self.d[5]
 
 
-    def full_FK(self, thetas):
-        return np.array([
-            self.T00(),
-            self.T01(thetas[0]),
-            self.T02(thetas[0], thetas[1]),
-            self.T03(thetas[0], thetas[1], thetas[2]),
-            self.T04(thetas[0], thetas[1], thetas[2], thetas[3]),
-            self.T05(thetas[0], thetas[1], thetas[2], thetas[3], thetas[4]),
-            self.T06(thetas[0], thetas[1], thetas[2], thetas[3], thetas[4], thetas[5])
-        ])
+    def full_FK(self, thetas) -> ndarray:
+        T01 = self.T01(thetas[0])
+        T02 = self.T0i(2, thetas[1], T01)
+        T03 = self.T0i(3, thetas[2], T02)
+        T04 = self.T0i(4, thetas[3], T03)
+        T05 = self.T0i(5, thetas[4], T04)
+        T06 = self.T0i(6, thetas[5], T05)
+        return np.array([self.T00, T01, T02, T03, T04, T05, T06])
 
-    def end_effector_tmatrix(self, thetas):
-        return self.T06(*thetas)
 
     def solve_IK(self, o, R=None):
         # TODO: Add a parameter to toggle range checks
@@ -248,21 +198,24 @@ class SixDOFKinematics(ElbowKinematics):
 
         if R is None:
             R = np.array([
+                [0, 0, 1],
                 [1, 0, 0],
-                [0, 1, 0],
-                [0, 0, 1]
+                [0, 1, 0]
             ])
 
-        #NOTE: The atan2 function is of the form atan2(y, x), not atan2(x, y) 
+        # NOTE: The atan2 function is of the form atan2(y, x), not atan2(x, y) 
         # In my opinion, that is backwards, but whatever
         oc = o - self.d[5]*R[:,2] 
+        print(f"o:{o}, oc:{oc}")
         # Singularity check: if xc and yc are both 0, then th1 is undefined, so just manually set th1 = 0 (as in a singular configuration, th1's value is irrelevant)
         if oc[0] == 0 and oc[1] == 0:
             th1 = 0
         else:
             th1 = atan2(oc[1], oc[0])
         # th2 is a function of th3, so have to declare them out of order
-        D = (oc[0]**2 + oc[1]**2 + (oc[2] - self.d[0])**2 - self.a[1]**2 - self.a[2]**2)/(2*self.a[1]*self.a[2])
+        #D = (oc[0]**2 + oc[1]**2 + (oc[2] - self.d[0])**2 - self.a[1]**2 - self.a[2]**2)/(2*self.a[1]*self.a[2])
+        print(f"d4 = {self.d[3]}")
+        D = (oc[0]**2 + oc[1]**2 + (oc[2] - self.d[0])**2 - self.a[1]**2 - self.d[3]**2)/(2*self.a[1]*self.d[3])
         # NOTE: Temp debug print
         print(f"D: {D}")
         th3_up = atan2(-sqrt(1 - D**2), D)
@@ -270,10 +223,21 @@ class SixDOFKinematics(ElbowKinematics):
         # NOTE: This check is kinda stupid - isn't atan2 bound between -pi and pi anyway?
         # NOTE: We need only check one th3 - the other will necesarrily be valid if the first is (I think)
         if th3_up < -np.pi or th3_up > np.pi or np.isnan(th3_up):
-            return (False, "Theta 3 out of bounds")
-        th2_up = atan2(oc[2] - self.d[0], sqrt(oc[0]**2 + oc[1]**2)) - atan2(self.a[2]*sin(th3_up), self.a[1]+self.a[2]*cos(th3_up))
-        th2_down = atan2(oc[2] - self.d[0], sqrt(oc[0]**2 + oc[1]**2)) - atan2(self.a[2]*sin(th3_down), self.a[1]+self.a[2]*cos(th3_up))
+            return (False, f"Theta 3 out of bounds: th3_up={th3_up}, th3_down={th3_down}")
+        # th2_up = atan2(oc[2] - self.d[0], sqrt(oc[0]**2 + oc[1]**2)) - atan2(self.a[2]*sin(th3_up), self.a[1]+self.a[2]*cos(th3_up))
+        # th2_down = atan2(oc[2] - self.d[0], sqrt(oc[0]**2 + oc[1]**2)) - atan2(self.a[2]*sin(th3_down), self.a[1]+self.a[2]*cos(th3_up))
+        th2_up = atan2(oc[2] - self.d[0], sqrt(oc[0]**2 + oc[1]**2)) - atan2(self.d[3]*sin(th3_up), self.a[1]+self.d[3]*cos(th3_up))
+        th2_down = atan2(oc[2] - self.d[0], sqrt(oc[0]**2 + oc[1]**2)) - atan2(self.d[3]*sin(th3_down), self.a[1]+self.d[3]*cos(th3_up))
         if th2_up < -np.pi or th2_up > np.pi or np.isnan(th2_up):
             return (False, "Theta 2 out of bounds")
+        # Once the first three angles have been calculated, make adjustments to th3 since the x axes are actually 90 degrees apart in the "default configuration" (as draw in the DH frame, which differs 
+        # from how they are expressed the in the geometric half of the 6DOF IK derivation)
+        th3_up = np.pi/2 - th3_down
+        th3_down += np.pi/2
+        th4_up = atan2(-cos(th1)*sin(th2_up+th3_up)*R[0,2]-sin(th1)*sin(th2_up+th3_up)*R[1,2]+cos(th2_up+th3_up)*R[2,2], cos(th1)*cos(th2_up+th3_up)*R[0,2]+sin(th1)*cos(th2_up+th3_up)*R[1,2]+sin(th2_up+th3_up)*R[2,2])
+        th4_down = atan2(-cos(th1)*sin(th2_down+th3_down)*R[0,2]-sin(th1)*sin(th2_down+th3_down)*R[1,2]+cos(th2_down+th3_down)*R[2,2], cos(th1)*cos(th2_down+th3_down)*R[0,2]+sin(th1)*cos(th2_down+th3_down)*R[1,2]+sin(th2_down+th3_down)*R[2,2])
+        th5_up = atan2(-sqrt(1 - (sin(th1)*R[0,2] - cos(th1)*R[1,2])**2), sin(th1)*R[0,2]-cos(th1)*R[1,2])
+        th5_down = atan2(sqrt(1 - (sin(th1)*R[0,2] - cos(th1)*R[1,2])**2), sin(th1)*R[0,2]-cos(th1)*R[1,2])
+        th6 = atan2(sin(th1)*R[0,1]-cos(th1)*R[1,1], -sin(th1)*R[0,0]+cos(th1)*R[1,0])
 
-        return (True, [[th1, th2_up, th3_up], [th1, th2_down, th3_down]])
+        return (True, [[th1, th2_up, th3_up, th4_up, th5_up, th6], [th1, th2_down, th3_down, th4_down, th5_down, th6]])
