@@ -6,3 +6,4 @@ Multiple arms can be simulated. Currently, only the elbow manipulator (3 revolut
 
 Here is a demonstration of inverse kinematics in action on the elbow manipulator:
 
+![Elbow Manipulator Demo](elbow_manipulator_sim.gif)

@@ -210,7 +210,7 @@ class Plotter:
 
     def flair_animation(self):
         self.ani = animation.FuncAnimation(fig=self.fig, func=self._flair_update, frames=490, interval=30, repeat=False)
-        self.ani.save(filename="/home/alexander/Videos/saved-videos/elbow_manipulator_sim.mp4", writer="ffmpeg", dpi=600)
+        # self.ani.save(filename="/home/alexander/Videos/saved-videos/elbow_manipulator_sim.gif", writer="ffmpeg", dpi=550)
 
 
     def show(self):
@@ -291,7 +291,7 @@ def main():
     robot = RobotArm(elbow_kinematics, thetas)
     # robot = RobotArm(six_dof_kinematics, thetas)
     plotter = Plotter(robot)
-    plotter.flair_animation()
+    # plotter.flair_animation()
     plotter.show()
 
 
