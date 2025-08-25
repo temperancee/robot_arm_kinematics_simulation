@@ -234,10 +234,14 @@ class SixDOFKinematics(ElbowKinematics):
         # from how they are expressed the in the geometric half of the 6DOF IK derivation)
         th3_up = np.pi/2 - th3_down
         th3_down += np.pi/2
+        # Inverse orientation
+        # NOTE: While currently unused, this alt might be useful when we limit ourselves to 180 deg rotation
+        th5_alt = atan2(-sqrt(1 - (sin(th1)*R[0,2] - cos(th1)*R[1,2])**2), sin(th1)*R[0,2]-cos(th1)*R[1,2])
+        th5 = atan2(sqrt(1 - (sin(th1)*R[0,2] - cos(th1)*R[1,2])**2), sin(th1)*R[0,2]-cos(th1)*R[1,2])
         th4_up = atan2(-cos(th1)*sin(th2_up+th3_up)*R[0,2]-sin(th1)*sin(th2_up+th3_up)*R[1,2]+cos(th2_up+th3_up)*R[2,2], cos(th1)*cos(th2_up+th3_up)*R[0,2]+sin(th1)*cos(th2_up+th3_up)*R[1,2]+sin(th2_up+th3_up)*R[2,2])
         th4_down = atan2(-cos(th1)*sin(th2_down+th3_down)*R[0,2]-sin(th1)*sin(th2_down+th3_down)*R[1,2]+cos(th2_down+th3_down)*R[2,2], cos(th1)*cos(th2_down+th3_down)*R[0,2]+sin(th1)*cos(th2_down+th3_down)*R[1,2]+sin(th2_down+th3_down)*R[2,2])
-        th5_up = atan2(-sqrt(1 - (sin(th1)*R[0,2] - cos(th1)*R[1,2])**2), sin(th1)*R[0,2]-cos(th1)*R[1,2])
-        th5_down = atan2(sqrt(1 - (sin(th1)*R[0,2] - cos(th1)*R[1,2])**2), sin(th1)*R[0,2]-cos(th1)*R[1,2])
         th6 = atan2(sin(th1)*R[0,1]-cos(th1)*R[1,1], -sin(th1)*R[0,0]+cos(th1)*R[1,0])
+        if sin(th5) == 0:
+            print("WARNING: Singular config s_5 = 0 - currently unhandled")
 
-        return (True, [[th1, th2_up, th3_up, th4_up, th5_up, th6], [th1, th2_down, th3_down, th4_down, th5_down, th6]])
+        return (True, [[th1, th2_up, th3_up, th4_up, th5, th6], [th1, th2_down, th3_down, th4_down, th5, th6]])

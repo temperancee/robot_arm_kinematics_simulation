@@ -284,12 +284,12 @@ def main():
         [np.pi/2,  0,  np.pi/2, -np.pi/2, np.pi/2, 0], # alpha
         [d1, 0,  0, d4, 0, d6]  # d
     ]
-    thetas: list[float] = [0, 0, 0]
-    # thetas: list[float] = [0, 0, np.pi/2, 0, 0, -np.pi/2]
+    # thetas: list[float] = [0, 0, 0]
+    thetas: list[float] = [0, 0, np.pi/2, 0, 0, -np.pi/2]
     elbow_kinematics = kinematics.ElbowKinematics(*elbow_dh_parameters)
-    # six_dof_kinematics = kinematics.SixDOFKinematics(*six_dof_dh_parameters)
-    robot = RobotArm(elbow_kinematics, thetas)
-    # robot = RobotArm(six_dof_kinematics, thetas)
+    six_dof_kinematics = kinematics.SixDOFKinematics(*six_dof_dh_parameters)
+    # robot = RobotArm(elbow_kinematics, thetas)
+    robot = RobotArm(six_dof_kinematics, thetas)
     plotter = Plotter(robot)
     # plotter.flair_animation()
     plotter.show()
