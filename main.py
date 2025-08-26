@@ -1,5 +1,3 @@
-from enum import auto
-from functools import partial
 from typing import Iterable
 from matplotlib import animation
 from matplotlib.artist import Artist
@@ -64,8 +62,8 @@ class RobotArm:
                 self.th = result[0]
             # Update the link positions via forward kinematics
             print(f"IK Thetas: {np.rad2deg(self.th)}")
-            print(self.th)
             self.update_link_positions()
+            print(f"Target position: {self.end_effector_pos}, actual position: {self.link_points[-1]}")
 
 
 
