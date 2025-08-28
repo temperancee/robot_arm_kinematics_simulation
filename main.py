@@ -1,3 +1,4 @@
+from abc import abstractmethod
 from typing import Iterable
 from matplotlib import animation
 from matplotlib.artist import Artist
@@ -13,17 +14,25 @@ class RobotArm:
         Parameters
         ----------
         kinematics: kinematics.Kinematics
-            The kinematic configuration of the robot, one of: ElbowKinematics, 5DOFKinematics, 6DOFKinematics
+            The kinematic configuration of the robot, one of type: ElbowKinematics, 5DOFKinematics, 6DOFKinematics
+        th: list[float]
+            The initial joint angles of the robot
         """
 
         # Save parameters
         self.kinematics = kinematics
-
         self.th = th
+
         # Initialise link positions and coordinate axes by running forward kinematics
         self.update_link_positions()
         self.end_effector_pos = self.link_points[-1]
+        # NOTE: Roll is around X, Pitch is around Y, Yaw is around Z
+        self.end_effector_orient = (90, 0, 90)
 
+        # Initialise constraints 
+        self.joint_limits = [
+            (-np.pi, np.pi) * len(self.th)
+        ]
 
     def update_link_positions(self):
         # Specify the origins of the coordinate frames, given in terms of frame 0, when the robot is 
@@ -38,7 +47,7 @@ class RobotArm:
         self.link_points = np.array(link_points)
 
 
-    def set_end_effector_pos(self, x, y, z):
+    def set_end_effector_pos(self, x, y, z, rpy=None):
         """
         Updates the robot link configuration via inverse kinematics 
 
@@ -48,23 +57,50 @@ class RobotArm:
         # TODO: The Euclidean distance didn't fix the issue - th1 still flips to 180 from 0 sometimes. We might want to
         #       fix this by passing thetas to solve_IK() and then making a direct comparison 
 
-        old_end_effector_pos = self.end_effector_pos
-        self.end_effector_pos = [x, y, z]
-        success, result = self.kinematics.solve_IK(self.end_effector_pos)
-        if not success:
-            print(f"ERROR: IK failed with {result}")
-            self.end_effector_pos = old_end_effector_pos
-        else:
-            # Compare Eucliean distances
-            if np.linalg.norm(np.array(result[0]) - np.array(self.th)) > np.linalg.norm(np.array(result[1]) - np.array(self.th)):
-                self.th = result[1]
-            else:
-                self.th = result[0]
-            # Update the link positions via forward kinematics
-            print(f"IK Thetas: {np.rad2deg(self.th)}")
-            self.update_link_positions()
-            print(f"Target position: {self.end_effector_pos}, actual position: {self.link_points[-1]}")
 
+        # Check that the end effector position given is not in the floor before running IK
+        if z > 0:
+            # Save old pos and orient in case IK fails
+            old_end_effector_pos = self.end_effector_pos
+            old_end_effector_orient = self.end_effector_orient
+            self.end_effector_pos = [x, y, z]
+            if rpy is not None:
+                self.end_effector_orient = rpy
+            result = self.kinematics.solve_IK(self.th[0], self.end_effector_pos, rpy)
+            if not result.success:
+                print(f"ERROR: IK failed with {result.error}")
+                self.end_effector_pos = old_end_effector_pos
+                self.end_effector_orient = old_end_effector_orient
+            else:
+                # Just choose up always for now - choose the solution who's value of theta1 is closest to the previous value
+                if abs(self.th[0] - result.solutions["up"][0]) > abs(self.th[0] - result.solutions["up_alt"][0]):
+                    self.th = result.solutions["up_alt"]
+                    print("ALT PICKED")
+                    print(f"ALT: {np.rad2deg(result.solutions["up_alt"][0])}, STANDARAD: {np.rad2deg(result.solutions["up"][0])}")
+                else:
+                    self.th = result.solutions["up"]
+                    print("STANDARD PICKED")
+                    print(f"ALT: {np.rad2deg(result.solutions["up_alt"][0])}, STANDARAD: {np.rad2deg(result.solutions["up"][0])}")
+                # Update the link positions via forward kinematics
+                print(f"IK Thetas: {np.rad2deg(self.th)}")
+                self.update_link_positions()
+        else:
+            print("ERROR: z <= 0 - invalid position given")
+
+
+    # def choose_solution(self, thetas: )
+
+    def validate_solution(self, thetas: list[float], x: float, y: float, z: float) -> list[str]:
+        """Check robot-specific constraints on a candidate solution."""
+        errors = []
+
+        # Joint limits
+        for i, (theta, (lo, hi)) in enumerate(zip(thetas, self.joint_limits)):
+            if not (lo < theta <= hi):
+                errors.append(f"Joint {i+1} out of range: {theta:.2f} rad")
+
+
+        return errors
 
 
 class Plotter:
@@ -83,8 +119,9 @@ class Plotter:
         # Store widgets to prevent garbage collection
         self.buttons = []
         self.sliders = []
-        # Store coordinate_values to update later
+        # Store current end effector coordinates and orientation
         self.coordinate_values = []
+        self.orient_values = []
 
         # Create widgets
         self._draw_widgets()
@@ -125,19 +162,31 @@ class Plotter:
         # Specifies the name, position and dimensions, and commands of the buttons 
         button_width, button_height = 0.02, 0.04
         button_spec = [
-            ("^", (0.01 + 0.03,      0.775,        button_width, button_height), Move(self.robot, self, dx=1).execute),
-            ("^", (0.01 + 0.03+0.05, 0.775,        button_width, button_height), Move(self.robot, self, dy=1).execute),
-            ("^", (0.01 + 0.03+0.10, 0.775,        button_width, button_height), Move(self.robot, self, dz=1).execute),
-            ("v", (0.01 + 0.03,      0.775 - 0.15, button_width, button_height), Move(self.robot, self, dx=-1).execute),
-            ("v", (0.01 + 0.03+0.05, 0.775 - 0.15, button_width, button_height), Move(self.robot, self, dy=-1).execute),
-            ("v", (0.01 + 0.03+0.10, 0.775 - 0.15, button_width, button_height), Move(self.robot, self, dz=-1).execute)
+            ("^", (0.01 + 0.03,      0.775,        button_width, button_height), MovePos(self.robot, self, dx=5).execute),
+            ("^", (0.01 + 0.03+0.05, 0.775,        button_width, button_height), MovePos(self.robot, self, dy=5).execute),
+            ("^", (0.01 + 0.03+0.10, 0.775,        button_width, button_height), MovePos(self.robot, self, dz=5).execute),
+            ("v", (0.01 + 0.03,      0.775 - 0.15, button_width, button_height), MovePos(self.robot, self, dx=-5).execute),
+            ("v", (0.01 + 0.03+0.05, 0.775 - 0.15, button_width, button_height), MovePos(self.robot, self, dy=-5).execute),
+            ("v", (0.01 + 0.03+0.10, 0.775 - 0.15, button_width, button_height), MovePos(self.robot, self, dz=-5).execute),
+
+            ("^", (0.01 + 0.03,      0.55,        button_width, button_height), MovePos(self.robot, self, dr=5).execute),
+            ("^", (0.01 + 0.03+0.05, 0.55,        button_width, button_height), MovePos(self.robot, self, dp=5).execute),
+            ("^", (0.01 + 0.03+0.10, 0.55,        button_width, button_height), MovePos(self.robot, self, dyaw=5).execute),
+            ("v", (0.01 + 0.03,      0.55 - 0.15, button_width, button_height), MovePos(self.robot, self, dr=-5).execute),
+            ("v", (0.01 + 0.03+0.05, 0.55 - 0.15, button_width, button_height), MovePos(self.robot, self, dp=-5).execute),
+            ("v", (0.01 + 0.03+0.10, 0.55 - 0.15, button_width, button_height), MovePos(self.robot, self, dyaw=-5).execute)
         ]
         # Add button text
         for i, label in enumerate(["x", "y", "z"]):
             self.fig.text(0.045 + 0.05*i, 0.775 - 0.05, label)
-        # Add text showing what x y and z equal
+        for i, label in enumerate(["r", "p", "y"]):
+            self.fig.text(0.045 + 0.05*i, 0.55 - 0.05, label)
+        # Add value text
         for i, value in enumerate(self.robot.end_effector_pos):
             self.coordinate_values.append(self.fig.text(0.035 + 0.05*i, 0.775 - 0.10, f"{value:.1f}"))
+        for i, value in enumerate(self.robot.end_effector_orient):
+            self.orient_values.append(self.fig.text(0.035 + 0.05*i, 0.55 - 0.10, f"{value:.1f}"))
+        # Draw buttons
         for (label, rect, command) in button_spec:
             ax_button = self.fig.add_axes(rect)
             button = Button(ax_button, label)
@@ -161,9 +210,12 @@ class Plotter:
         """
         # TODO: The IK and FK controls should update each others slider/text fields - right now they are completely decoupled
 
-        # Update position text 
+        # Update position and orientation text 
         for i, value in enumerate(self.robot.end_effector_pos):
-            self.coordinate_values[i].set_text(f"{value:.2f}")
+            self.coordinate_values[i].set_text(f"{value:.1f}")
+        for i, value in enumerate(self.robot.end_effector_orient):
+            self.orient_values[i].set_text(f"{value:.1f}")
+
 
         self.arm_plot.set_data_3d(self.robot.link_points[:, 0], self.robot.link_points[:, 1], self.robot.link_points[:, 2]) # type: ignore # This is not an error: upsettingly, due to the way Axes3D.plot/Axes3D.plot3D is written, type interface sees it as returning ArrayOf(Line2D), when actually, it returns ArrayOf(Line3D)
         self.draw_frame_axes(initial=False)
@@ -173,31 +225,31 @@ class Plotter:
     def _flair_update(self, frame) -> Iterable[Artist]:
         # goto x=40
         if frame<41:
-            Move(self.robot, self, auto_update=False, dx=-1).execute()
+            MovePos(self.robot, self, auto_update=False, dx=-1).execute()
         # goto z=5
         elif frame<66:
-            Move(self.robot, self, auto_update=False, dz=-1).execute()
+            MovePos(self.robot, self, auto_update=False, dz=-1).execute()
         # goto y = 55
         elif frame<121:
-            Move(self.robot, self, auto_update=False, dy=1).execute()
+            MovePos(self.robot, self, auto_update=False, dy=1).execute()
         # Square
         elif frame<161:
-            Move(self.robot, self, auto_update=False, dz=1.6).execute()
+            MovePos(self.robot, self, auto_update=False, dz=1.6).execute()
         elif frame<241:
-            Move(self.robot, self, auto_update=False, dy=-1).execute()
+            MovePos(self.robot, self, auto_update=False, dy=-1).execute()
         elif frame<281:
-            Move(self.robot, self, auto_update=False, dz=-1.6).execute()
+            MovePos(self.robot, self, auto_update=False, dz=-1.6).execute()
         elif frame<361:
-            Move(self.robot, self, auto_update=False, dy=1).execute()
+            MovePos(self.robot, self, auto_update=False, dy=1).execute()
         # End of square
         # Return to y=0
         elif frame<416:
-            Move(self.robot, self, auto_update=False, dy=-1).execute()
+            MovePos(self.robot, self, auto_update=False, dy=-1).execute()
         # Final pose
         elif frame<456:
-            Move(self.robot, self, auto_update=False, dx=-0.8, dz=1.5).execute()
+            MovePos(self.robot, self, auto_update=False, dx=-0.8, dz=1.5).execute()
         elif frame<491:
-            Move(self.robot, self, auto_update=False, dz=0.5).execute()
+            MovePos(self.robot, self, auto_update=False, dz=0.5).execute()
 
         self.arm_plot.set_data_3d(self.robot.link_points[:, 0], self.robot.link_points[:, 1], self.robot.link_points[:, 2]) # type: ignore # This is not an error: upsettingly, due to the way Axes3D.plot/Axes3D.plot3D is written, type interface sees it as returning ArrayOf(Line2D), when actually, it returns ArrayOf(Line3D)
         self.draw_frame_axes(initial=False)
@@ -218,26 +270,41 @@ class Plotter:
 
 """ ---- Plot control ---- """
 
-class Move:
-    def __init__(self, robot: RobotArm, plotter: Plotter, auto_update=True, dx=0.0, dy=0.0, dz=0.0):
+class Command:
+    def __init__(self, robot: RobotArm, plotter: Plotter) -> None:
         self.robot = robot
         self.plotter = plotter
-        self.auto_update = auto_update
-        self.dx = dx
-        self.dy = dy
-        self.dz = dz
 
-
+    @abstractmethod
     def execute(self):
         """
         Executes the given movement command, updates the robot accordingly, and plots the result on the figure
         """
+        pass
+
+
+
+class MovePos(Command):
+    def __init__(self, robot: RobotArm, plotter: Plotter, auto_update=True, dx=0.0, dy=0.0, dz=0.0, dr=0.0, dp=0.0, dyaw=0.0):
+        super().__init__(robot, plotter)
+        self.auto_update = auto_update
+        self.dx = dx
+        self.dy = dy
+        self.dz = dz
+        self.dr = dr
+        self.dp = dp
+        self.dyaw = dyaw
+
+    def execute(self):
         x, y, z = self.robot.end_effector_pos
-        self.robot.set_end_effector_pos(x + self.dx, y + self.dy, z + self.dz)
+        (r, p, yaw) = self.robot.end_effector_orient
+        self.robot.set_end_effector_pos(x + self.dx, y + self.dy, z + self.dz, (r + self.dr, p + self.dp, yaw + self.dyaw))
         if self.auto_update:
             self.plotter.update_figure()
 
-class MoveAngle:
+
+
+class MoveAngle(Command):
     def __init__(self, robot: RobotArm, plotter: Plotter, th_index: int):
         """
         Parameters
@@ -245,17 +312,14 @@ class MoveAngle:
         th_index: int
             The index of the list of thetas. This determines which theta this instance edits.
         """
-        self.robot = robot
-        self.plotter = plotter
+        super().__init__(robot, plotter)
         self.th_index = th_index
 
     def execute(self):
         """
         Executes the given movement command by updating the robot accordingly, and plots the result on the figure
         """
-        print(self.th_index)
-        self.robot.th[self.th_index] = np.deg2rad(self.plotter.sliders[self.th_index].val) # type: ignore # Thinks robot.th can be a str due to the bad error handling in the RobotArm class
-        print(self.robot.th[self.th_index])
+        self.robot.th[self.th_index] = np.deg2rad(self.plotter.sliders[self.th_index].val) # type: ignore # Thinks robot.th can be a str due to the error handling in the RobotArm class not working
         self.robot.update_link_positions()
         self.plotter.update_figure()
 

@@ -1,7 +1,8 @@
+from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Optional
 import numpy as np
-from numpy import cos, ndarray, sin, atan2, sqrt
+from numpy import cos, ndarray, rad2deg, sin, atan2, sqrt
 
 class TMatrix:
 
@@ -17,6 +18,13 @@ class TMatrix:
         self.position = self.matrix[:3, 3]
         # Rotation matrix part of the transformation matrix
         self.rotation = self.matrix[:3, :3]
+
+@dataclass
+class IKResult:
+    """ Return type of the inverse kinematics functions """
+    success: bool
+    solutions: dict[str, list[float]] = field(default_factory=dict)
+    error: Optional[str] = None 
 
 
 class Kinematics(ABC):
@@ -44,7 +52,7 @@ class Kinematics(ABC):
         """ Used to define maximum length of each axis on the plot """
         
     @abstractmethod
-    def solve_IK(self, o, R=None) -> Any:
+    def solve_IK(self, prev_th1: float, o, rpy=None) -> IKResult:
         """ Solve the inverse kinematics problem """
         pass
 
@@ -99,7 +107,7 @@ class ElbowKinematics(Kinematics):
         return np.array([self.T00, T01, T02, T03])
 
 
-    def solve_IK(self, o, R=None):
+    def solve_IK(self, prev_th1, o, rpy=None) -> IKResult:
         # TODO: Add a parameter to toggle range checks
         """
         Updates theta parameters via the inverse kinematic equations. Also checks if the thetas are
@@ -109,9 +117,6 @@ class ElbowKinematics(Kinematics):
         ----------
         o: list[float]
             The desired x, y, z coordinates of the end-effector.
-        R: 2D numpy array
-            The desired orientation of the end-effector, given as a rotation matrix 
-            which gives the orientation of the end-effector frame wrt the base frame.
         elbow_up: bool
             If true, use the elbow up configuration, otherwise use the elbow down configuration.
             If <unadded_parameter_to_check_theta_ranges> is also true, and the specified configuration
@@ -124,30 +129,35 @@ class ElbowKinematics(Kinematics):
             Given in radians.
         """
 
-        #NOTE: The atan2 function is of the form atan2(y, x), not atan2(x, y) 
-        # In my opinion, that is backwards, but whatever
+        # NOTE: The atan2 function is of the form atan2(y, x), not atan2(x, y) 
         oc = o
         # Singularity check: if xc and yc are both 0, then th1 is undefined, so just manually set th1 = 0 (as in a singular configuration, th1's value is irrelevant)
-        if oc[0] == 0 and oc[1] == 0:
+        # Also flag this as a singularity so it can be manually changed outside of this function - if we had th1=45 for example at x=1 y=1, then moved back to x=0 y=0, we would want th1 to remain 45 for
+        # continuity of movement
+        if round(oc[0]) == 0 and round(oc[1]) == 0:
             th1 = 0
         else:
             th1 = atan2(oc[1], oc[0])
+
+        # Fix annoying issue where whole robot does a 180
+        if prev_th1 == 0 and rad2deg(th1) == -180:
+            th1 = 0
+        elif rad2deg(prev_th1) == -180 and th1 == 0:
+            th1 = -180
         # th2 is a function of th3, so have to declare them out of order
         D = (oc[0]**2 + oc[1]**2 + (oc[2] - self.d[0])**2 - self.a[1]**2 - self.a[2]**2)/(2*self.a[1]*self.a[2])
-        # NOTE: Temp debug print
-        print(f"D: {D}")
         th3_up = atan2(-sqrt(1 - D**2), D)
         th3_down = atan2(sqrt(1 - D**2), D)
-        # NOTE: This check is kinda stupid - isn't atan2 bound between -pi and pi anyway?
+        # NOTE: This check is kinda stupid - isn't atan2 bound between -pi and pi anyway? We leave this here since it will be useful when bounding the angles
         # NOTE: We need only check one th3 - the other will necesarrily be valid if the first is (I think)
         if th3_up < -np.pi or th3_up > np.pi or np.isnan(th3_up):
-            return (False, f"Theta 3 out of bounds: th3_up={th3_up}, th3_down={th3_down}")
+            return IKResult(False, error=f"Theta 3 out of bounds: th3_up={th3_up}, th3_down={th3_down}")
         th2_up = atan2(oc[2] - self.d[0], sqrt(oc[0]**2 + oc[1]**2)) - atan2(self.a[2]*sin(th3_up), self.a[1]+self.a[2]*cos(th3_up))
         th2_down = atan2(oc[2] - self.d[0], sqrt(oc[0]**2 + oc[1]**2)) - atan2(self.a[2]*sin(th3_down), self.a[1]+self.a[2]*cos(th3_up))
         if th2_up < -np.pi or th2_up > np.pi or np.isnan(th2_up):
-            return (False, "Theta 2 out of bounds")
+            return IKResult(False, error="Theta 2 out of bounds")
 
-        return (True, [[th1, th2_up, th3_up], [th1, th2_down, th3_down]])
+        return IKResult(True, solutions={"up": [th1, th2_up, th3_up], "down": [th1, th2_down, th3_down]})
 
 
 
@@ -170,18 +180,18 @@ class SixDOFKinematics(ElbowKinematics):
         return np.array([self.T00, T01, T02, T03, T04, T05, T06])
 
 
-    def solve_IK(self, o, R=None):
+    def solve_IK(self, prev_th1, o, rpy=None) -> IKResult:
         # TODO: Add a parameter to toggle range checks
         """
         Updates theta parameters via the inverse kinematic equations. Also checks if the thetas are
-        valid given our angle constraints (theta in [-pi/2, pi/2])
+        valid given our angle constraints (theta in [-pi/2, pi/2] (to be added later))
 
         Parameters
         ----------
         o: list[float]
             The desired x, y, z coordinates of the end-effector.
         R: 2D numpy array
-            The desired orientation of the end-effector, given as a rotation matrix 
+            The desired orientation of the end-effector. Given as a rotation matrix 
             which gives the orientation of the end-effector frame wrt the base frame.
         elbow_up: bool
             If true, use the elbow up configuration, otherwise use the elbow down configuration.
@@ -195,44 +205,83 @@ class SixDOFKinematics(ElbowKinematics):
             Given in radians.
         """
 
-        if R is None:
+        if rpy is None:
             R = np.array([
                 [0, 0, 1],
                 [1, 0, 0],
                 [0, 1, 0]
             ])
+        else:
+            (r, p, y) = np.deg2rad(rpy)
+            print(f"roll={r}, pitch={p}, yaw={y}")
+            R = np.array([
+                [cos(y)*cos(p), -sin(y)*cos(r)+cos(y)*sin(p)*sin(r),  sin(y)*sin(r)+cos(y)*sin(p)*cos(r)],
+                [sin(y)*cos(p),  cos(y)*cos(r)+sin(y)*sin(p)*sin(r), -cos(y)*sin(r)+sin(y)*sin(p)*cos(r)],
+                [      -sin(p),                       cos(p)*sin(r),                       cos(p)*cos(r)]
+            ])
+            print(f"R = {R}")
 
         # NOTE: The atan2 function is of the form atan2(y, x), not atan2(x, y) 
-        # In my opinion, that is backwards, but whatever
         oc = o - self.d[5]*R[:,2] 
         print(f"o:{o}, oc:{oc}")
-        # Singularity check: if xc and yc are both 0, then th1 is undefined, so just manually set th1 = 0 (as in a singular configuration, th1's value is irrelevant)
-        if oc[0] == 0 and oc[1] == 0:
+        # We don't need to check if ox and oy = 0, np.atan2(0,0) is defined to be 0
+        # Also flag this as a singularity so it can be manually changed outside of this function - if we had th1=45 for example at x=1 y=1, then moved back to x=0 y=0, we would want th1 to remain 45 for
+        # continuity of movement
+        th1 = atan2(oc[1], oc[0])
+        # HACK: If ox and oy are both really close to 0, but y is something like -2.28x10^-18, th1 will be 90, even though it should be atan2(0,0)=0. We manually intervene and set theta to 0
+        # TODO: Make it use th1_alt in later calculations
+        if round(oc[0]) == 0 and round(oc[1]) == 0:
             th1 = 0
+        # Create alternate theta that is a 180 deg rotation of the other theta, while still being in (-pi, pi]
+        if th1 > 0:
+            th1_alt = th1 - np.pi
         else:
-            th1 = atan2(oc[1], oc[0])
-        # th2 is a function of th3, so have to declare them out of order
-        #D = (oc[0]**2 + oc[1]**2 + (oc[2] - self.d[0])**2 - self.a[1]**2 - self.a[2]**2)/(2*self.a[1]*self.a[2])
-        print(f"d4 = {self.d[3]}")
+            th1_alt = th1 + np.pi
+
+        
+
         D = (oc[0]**2 + oc[1]**2 + (oc[2] - self.d[0])**2 - self.a[1]**2 - self.d[3]**2)/(2*self.a[1]*self.d[3])
-        # NOTE: Temp debug print
-        print(f"D: {D}")
+        # NOTE: |D|>1 implies th3 cannot be computed, and hence th2 cannot be computed. This only occurs when a o_c is unreachable by the elbow manipulator.
+        if abs(D) > 1:
+            return IKResult(False, error=f"Configuration impossible: D={D}")
         th3_up = atan2(-sqrt(1 - D**2), D)
         th3_down = atan2(sqrt(1 - D**2), D)
-        # NOTE: This check is kinda stupid - isn't atan2 bound between -pi and pi anyway?
-        # NOTE: We need only check one th3 - the other will necesarrily be valid if the first is (I think)
-        if th3_up < -np.pi or th3_up > np.pi or np.isnan(th3_up):
-            return (False, f"Theta 3 out of bounds: th3_up={th3_up}, th3_down={th3_down}")
-        # th2_up = atan2(oc[2] - self.d[0], sqrt(oc[0]**2 + oc[1]**2)) - atan2(self.a[2]*sin(th3_up), self.a[1]+self.a[2]*cos(th3_up))
-        # th2_down = atan2(oc[2] - self.d[0], sqrt(oc[0]**2 + oc[1]**2)) - atan2(self.a[2]*sin(th3_down), self.a[1]+self.a[2]*cos(th3_up))
         th2_up = atan2(oc[2] - self.d[0], sqrt(oc[0]**2 + oc[1]**2)) - atan2(self.d[3]*sin(th3_up), self.a[1]+self.d[3]*cos(th3_up))
         th2_down = atan2(oc[2] - self.d[0], sqrt(oc[0]**2 + oc[1]**2)) - atan2(self.d[3]*sin(th3_down), self.a[1]+self.d[3]*cos(th3_up))
-        if th2_up < -np.pi or th2_up > np.pi or np.isnan(th2_up):
-            return (False, "Theta 2 out of bounds")
-        # Once the first three angles have been calculated, make adjustments to th3 since the x axes are actually 90 degrees apart in the "default configuration" (as draw in the DH frame, which differs 
-        # from how they are expressed the in the geometric half of the 6DOF IK derivation)
+        # Once the first three angles have been calculated, make adjustments to th3 since the x axes are actually 90 degrees apart in the "default configuration" as draw in the DH frame, which differs 
+        # from how they are expressed the in the geometric solution of the inverse position problem
         th3_up = np.pi/2 - th3_down
         th3_down += np.pi/2
+
+        def inverse_orientation(th1, th2, th3):
+
+            r11 = cos(th1)*cos(th2+th3)*R[0,0]+sin(th1)*cos(th2+th3)*R[1,0]+sin(th2+th3)*R[2,0]
+            r21 = sin(th1)*R[0,0]-cos(th1)*R[1,0]
+            r13 = cos(th1)*cos(th2+th3)*R[0,2]+sin(th1)*cos(th2+th3)*R[1,2]+sin(th2+th3)*R[2,2]
+            r23 = sin(th1)*R[0,2]-cos(th1)*R[1,2]
+            r31 = cos(th1)*sin(th2+th3)*R[0,0]+sin(th1)*sin(th2+th3)*R[1,0]-cos(th2+th3)*R[2,0]
+            r32 = cos(th1)*sin(th2+th3)*R[0,1]+sin(th1)*sin(th2+th3)*R[1,1]-cos(th2+th3)*R[2,1]
+            r33 = cos(th1)*sin(th2+th3)*R[0,2]+sin(th1)*sin(th2+th3)*R[1,2]-cos(th2+th3)*R[2,2]
+
+            th5 = atan2(sqrt(1 - r33**2), r33)
+
+            if sin(th5) == 0 and cos(th5) == 1:
+                th5 = 0
+                th4 = 0
+                th6 = atan2(r21, r11)
+            elif sin(th5) == 0 and cos(th5) == -1:
+                th5 = 0
+                th4 = 0
+                th6 = atan2(-r21, -r11)
+            else:
+                th4 = atan2(r23, r13)
+                th6 = atan2(r32, -r31)
+            return (th4, th5, th6)
+        
+        th4_up, th5_up, th6_up = inverse_orientation(th1, th2_up, th3_up)
+        th4_down, th5_down, th6_down = inverse_orientation(th1, th2_down, th3_down)
+        th4_up_alt, th5_up_alt, th6_up_alt = inverse_orientation(th1_alt, th2_up, th3_up)
+        th4_up_alt, th5_up_alt, th6_up_alt = inverse_orientation(th1_alt, th2_down, th3_down)
 
         # Inverse orientation
         r11_up = cos(th1)*cos(th2_up+th3_up)*R[0,0]+sin(th1)*cos(th2_up+th3_up)*R[1,0]+sin(th2_up+th3_up)*R[2,0]
@@ -251,6 +300,7 @@ class SixDOFKinematics(ElbowKinematics):
         r32_down = cos(th1)*sin(th2_down+th3_down)*R[0,1]+sin(th1)*sin(th2_down+th3_down)*R[1,1]-cos(th2_down+th3_down)*R[2,1]
         r33_down = cos(th1)*sin(th2_down+th3_down)*R[0,2]+sin(th1)*sin(th2_down+th3_down)*R[1,2]-cos(th2_down+th3_down)*R[2,2]
 
+        # NOTE: Don't forget about the alternate configuration (negative sqrt choice)
         th5_up = atan2(sqrt(1 - r33_up**2), r33_up)
         th5_down = atan2(sqrt(1 - r33_down**2), r33_down)
 
@@ -298,8 +348,4 @@ class SixDOFKinematics(ElbowKinematics):
 
 
         
-        # R36 = np.array([
-        #
-        # ])
-        # print(f"R^3_6 = {R36}")
-        return (True, [[th1, th2_up, th3_up, th4_up, th5_up, th6_up], [th1, th2_down, th3_down, th4_down, th5_down, th6_down]])
+        return IKResult(True, solutions={"up": [th1, th2_up, th3_up, th4_up, th5_up, th6_up], "down": [th1, th2_down, th3_down, th4_down, th5_down, th6_down], "up_alt": [th1_alt, th2_up, th3_up, th4_up, th5_up, th6_up], "down_alt": [th1_alt, th2_down, th3_down, th4_down, th5_down, th6_down]})
