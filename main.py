@@ -46,5 +46,5 @@ if __name__ == '__main__':
 
     # Plot configuration
     plotter = Plotter(robot)
-    # plotter.flair_animation()
+    plotter.flair_animation("5DOF_manipulator_sim.gif", 570)
     plotter.show()

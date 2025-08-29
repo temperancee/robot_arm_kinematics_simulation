@@ -7,8 +7,8 @@ Multiple arms can be simulated. The three choices are: the elbow manipulator (3 
 Here is a demonstration of inverse kinematics in action on the 6DOF manipulator:
 ![6DOF Manipulator Demo](6DOF_manipulator_sim.gif)
 
-And a similar demonstration on the elbow manipulator:
-![Elbow Manipulator Demo](elbow_manipulator_sim.gif)
+And a similar demonstration on 5DOF manipulator:
+![5DOF Manipulator Demo](5DOF_manipulator_sim.gif)
 
 # Running
 

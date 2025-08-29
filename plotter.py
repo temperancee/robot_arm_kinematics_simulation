@@ -155,7 +155,7 @@ class Plotter:
             MovePos(self.robot, self, auto_update=False, dx=-0.8, dz=1.5).execute()
         elif frame<491:
             MovePos(self.robot, self, auto_update=False, dz=0.5).execute()
-        elif len(self.robot.th) > 3:
+        elif len(self.robot.th) == 6:
             if frame < 511:
                 MovePos(self.robot, self, auto_update=False, dr=-2).execute()
             elif frame < 531:
@@ -172,8 +172,13 @@ class Plotter:
                 MovePos(self.robot, self, auto_update=False, dr=2).execute()
             elif frame < 731:
                 MovePos(self.robot, self, auto_update=False, dx=0.5, dz=-0.75, dr=2).execute()
-        else:
-            print(len(self.robot.th), frame)
+        elif len(self.robot.th) == 5:
+            if frame < 511:
+                MovePos(self.robot, self, auto_update=False, dr=-2).execute()
+            elif frame < 551:
+                MovePos(self.robot, self, auto_update=False, dr=2).execute()
+            elif frame < 571:
+                MovePos(self.robot, self, auto_update=False, dr=-2).execute()
 
 
         self.arm_plot.set_data_3d(self.robot.link_points[:, 0], self.robot.link_points[:, 1], self.robot.link_points[:, 2]) # type: ignore # This is not an error: upsettingly, due to the way Axes3D.plot/Axes3D.plot3D is written, type interface sees it as returning ArrayOf(Line2D), when actually, it returns ArrayOf(Line3D)
@@ -183,9 +188,9 @@ class Plotter:
         return plots
 
 
-    def flair_animation(self):
-        self.ani = animation.FuncAnimation(fig=self.fig, func=self._flair_update, frames=730, interval=30, repeat=False)
-        # self.ani.save(filename="6DOF_manipulator_sim.gif", writer="ffmpeg", dpi=550)
+    def flair_animation(self, filename, frames):
+        self.ani = animation.FuncAnimation(fig=self.fig, func=self._flair_update, frames=frames, interval=30, repeat=False)
+        self.ani.save(filename=filename, writer="ffmpeg", dpi=550)
 
 
     def show(self):

@@ -67,7 +67,7 @@ class RobotArm:
                 self.end_effector_orient = old_end_effector_orient
             else:
                 # Generally, we choose the configuration that is closest to the previous one. When there is a large flip in th1, however, we choose the opposite, as this will be a more natural position
-                up_closer = abs(self.th[1] - result.solutions["down"][1]) > abs(self.th[1] - result.solutions["up"][1])
+                up_closer = abs(self.th[1] - result.solutions["down"][1]) > abs(self.th[1] - result.solutions["up"][1]) - 1
                 th_180_change = abs(self.th[0] - result.solutions["up"][0]) > 3 # it's in radians, remember
                 print(f"old_theta: {self.th[0]} new_theta: {result.solutions["up"][0]}")
                 if up_closer and th_180_change:
