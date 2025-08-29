@@ -66,21 +66,29 @@ class RobotArm:
             self.end_effector_pos = [x, y, z]
             if rpy is not None:
                 self.end_effector_orient = rpy
-            result = self.kinematics.solve_IK(self.th[0], self.end_effector_pos, rpy)
+            result = self.kinematics.solve_IK(self.end_effector_pos, rpy)
             if not result.success:
                 print(f"ERROR: IK failed with {result.error}")
                 self.end_effector_pos = old_end_effector_pos
                 self.end_effector_orient = old_end_effector_orient
             else:
-                # Just choose up always for now - choose the solution who's value of theta1 is closest to the previous value
-                if abs(self.th[0] - result.solutions["up"][0]) > abs(self.th[0] - result.solutions["up_alt"][0]):
-                    self.th = result.solutions["up_alt"]
-                    print("ALT PICKED")
-                    print(f"ALT: {np.rad2deg(result.solutions["up_alt"][0])}, STANDARAD: {np.rad2deg(result.solutions["up"][0])}")
-                else:
+                # Generally, we choose the configuration that is closest to the previous one. When there is a large flip in th1, however, we choose the opposite, as this will be a more natural position
+                up_closer = abs(self.th[1] - result.solutions["down"][1]) > abs(self.th[1] - result.solutions["up"][1])
+                th_180_change = abs(self.th[0] - result.solutions["up"][0]) > 3 # it's in radians, remember
+                print(f"old_theta: {self.th[0]} new_theta: {result.solutions["up"][0]}")
+                if up_closer and th_180_change:
+                    self.th = result.solutions["down"]
+                    print("DOWN PICKED")
+                elif th_180_change:
                     self.th = result.solutions["up"]
-                    print("STANDARD PICKED")
-                    print(f"ALT: {np.rad2deg(result.solutions["up_alt"][0])}, STANDARAD: {np.rad2deg(result.solutions["up"][0])}")
+                    print("TH180 and UP PICKED")
+                elif up_closer:
+                    self.th = result.solutions["up"]
+                    print("UP PICKED")
+                else:
+                    self.th = result.solutions["down"]
+                    print("DOWN PICKED")
+
                 # Update the link positions via forward kinematics
                 print(f"IK Thetas: {np.rad2deg(self.th)}")
                 self.update_link_positions()
@@ -194,13 +202,13 @@ class Plotter:
             button.on_clicked(lambda event, cmd=command: cmd())
             self.buttons.append(button)
 
-        # Sliders
-        ax_angle_sliders = [self.fig.add_axes((0.175, 0.01 + i*0.03, 0.65, 0.02)) for i in range(len(self.robot.th))]
-        for i in range(len(self.robot.th)):
-            b = Slider(ax_angle_sliders[i], f"Theta {i+1}", -180, 180, valinit=np.rad2deg(self.robot.th[i]))
-            # Slider.on_changes requires an event parameter, but we don't use it
-            b.on_changed(lambda event, cmd=MoveAngle(self.robot, self, i).execute: cmd())
-            self.sliders.append(b)
+        # # Sliders
+        # ax_angle_sliders = [self.fig.add_axes((0.175, 0.01 + i*0.03, 0.65, 0.02)) for i in range(len(self.robot.th))]
+        # for i in range(len(self.robot.th)):
+        #     b = Slider(ax_angle_sliders[i], f"Theta {i+1}", -180, 180, valinit=np.rad2deg(self.robot.th[i]))
+        #     # Slider.on_changes requires an event parameter, but we don't use it
+        #     b.on_changed(lambda event, cmd=MoveAngle(self.robot, self, i).execute: cmd())
+        #     self.sliders.append(b)
 
 
 
@@ -250,6 +258,26 @@ class Plotter:
             MovePos(self.robot, self, auto_update=False, dx=-0.8, dz=1.5).execute()
         elif frame<491:
             MovePos(self.robot, self, auto_update=False, dz=0.5).execute()
+        elif len(self.robot.th) > 3:
+            if frame < 511:
+                MovePos(self.robot, self, auto_update=False, dr=-2).execute()
+            elif frame < 531:
+                MovePos(self.robot, self, auto_update=False, dyaw=-2).execute()
+            elif frame < 571:
+                MovePos(self.robot, self, auto_update=False, dr=2).execute()
+            elif frame < 611:
+                MovePos(self.robot, self, auto_update=False, dyaw=2).execute()
+            elif frame < 651:
+                MovePos(self.robot, self, auto_update=False, dr=-2).execute()
+            elif frame < 671:
+                MovePos(self.robot, self, auto_update=False, dyaw=-2).execute()
+            elif frame < 691:
+                MovePos(self.robot, self, auto_update=False, dr=2).execute()
+            elif frame < 731:
+                MovePos(self.robot, self, auto_update=False, dx=0.5, dz=-0.75, dr=2).execute()
+        else:
+            print(len(self.robot.th), frame)
+
 
         self.arm_plot.set_data_3d(self.robot.link_points[:, 0], self.robot.link_points[:, 1], self.robot.link_points[:, 2]) # type: ignore # This is not an error: upsettingly, due to the way Axes3D.plot/Axes3D.plot3D is written, type interface sees it as returning ArrayOf(Line2D), when actually, it returns ArrayOf(Line3D)
         self.draw_frame_axes(initial=False)
@@ -259,8 +287,8 @@ class Plotter:
 
 
     def flair_animation(self):
-        self.ani = animation.FuncAnimation(fig=self.fig, func=self._flair_update, frames=490, interval=30, repeat=False)
-        # self.ani.save(filename="/home/alexander/Videos/saved-videos/elbow_manipulator_sim.gif", writer="ffmpeg", dpi=550)
+        self.ani = animation.FuncAnimation(fig=self.fig, func=self._flair_update, frames=730, interval=30, repeat=False)
+        self.ani.save(filename="6DOF_manipulator_sim.gif", writer="ffmpeg", dpi=550)
 
 
     def show(self):
@@ -353,7 +381,7 @@ def main():
     # robot = RobotArm(elbow_kinematics, thetas)
     robot = RobotArm(six_dof_kinematics, thetas)
     plotter = Plotter(robot)
-    # plotter.flair_animation()
+    plotter.flair_animation()
     plotter.show()
 
 

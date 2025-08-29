@@ -52,7 +52,7 @@ class Kinematics(ABC):
         """ Used to define maximum length of each axis on the plot """
         
     @abstractmethod
-    def solve_IK(self, prev_th1: float, o, rpy=None) -> IKResult:
+    def solve_IK(self, o, rpy=None) -> IKResult:
         """ Solve the inverse kinematics problem """
         pass
 
@@ -107,7 +107,7 @@ class ElbowKinematics(Kinematics):
         return np.array([self.T00, T01, T02, T03])
 
 
-    def solve_IK(self, prev_th1, o, rpy=None) -> IKResult:
+    def solve_IK(self, o, rpy=None) -> IKResult:
         # TODO: Add a parameter to toggle range checks
         """
         Updates theta parameters via the inverse kinematic equations. Also checks if the thetas are
@@ -139,11 +139,6 @@ class ElbowKinematics(Kinematics):
         else:
             th1 = atan2(oc[1], oc[0])
 
-        # Fix annoying issue where whole robot does a 180
-        if prev_th1 == 0 and rad2deg(th1) == -180:
-            th1 = 0
-        elif rad2deg(prev_th1) == -180 and th1 == 0:
-            th1 = -180
         # th2 is a function of th3, so have to declare them out of order
         D = (oc[0]**2 + oc[1]**2 + (oc[2] - self.d[0])**2 - self.a[1]**2 - self.a[2]**2)/(2*self.a[1]*self.a[2])
         th3_up = atan2(-sqrt(1 - D**2), D)
@@ -180,7 +175,7 @@ class SixDOFKinematics(ElbowKinematics):
         return np.array([self.T00, T01, T02, T03, T04, T05, T06])
 
 
-    def solve_IK(self, prev_th1, o, rpy=None) -> IKResult:
+    def solve_IK(self, o, rpy=None) -> IKResult:
         # TODO: Add a parameter to toggle range checks
         """
         Updates theta parameters via the inverse kinematic equations. Also checks if the thetas are
@@ -229,16 +224,8 @@ class SixDOFKinematics(ElbowKinematics):
         # continuity of movement
         th1 = atan2(oc[1], oc[0])
         # HACK: If ox and oy are both really close to 0, but y is something like -2.28x10^-18, th1 will be 90, even though it should be atan2(0,0)=0. We manually intervene and set theta to 0
-        # TODO: Make it use th1_alt in later calculations
         if round(oc[0]) == 0 and round(oc[1]) == 0:
             th1 = 0
-        # Create alternate theta that is a 180 deg rotation of the other theta, while still being in (-pi, pi]
-        if th1 > 0:
-            th1_alt = th1 - np.pi
-        else:
-            th1_alt = th1 + np.pi
-
-        
 
         D = (oc[0]**2 + oc[1]**2 + (oc[2] - self.d[0])**2 - self.a[1]**2 - self.d[3]**2)/(2*self.a[1]*self.d[3])
         # NOTE: |D|>1 implies th3 cannot be computed, and hence th2 cannot be computed. This only occurs when a o_c is unreachable by the elbow manipulator.
@@ -280,72 +267,5 @@ class SixDOFKinematics(ElbowKinematics):
         
         th4_up, th5_up, th6_up = inverse_orientation(th1, th2_up, th3_up)
         th4_down, th5_down, th6_down = inverse_orientation(th1, th2_down, th3_down)
-        th4_up_alt, th5_up_alt, th6_up_alt = inverse_orientation(th1_alt, th2_up, th3_up)
-        th4_up_alt, th5_up_alt, th6_up_alt = inverse_orientation(th1_alt, th2_down, th3_down)
 
-        # Inverse orientation
-        r11_up = cos(th1)*cos(th2_up+th3_up)*R[0,0]+sin(th1)*cos(th2_up+th3_up)*R[1,0]+sin(th2_up+th3_up)*R[2,0]
-        r21 = sin(th1)*R[0,0]-cos(th1)*R[1,0]
-        r13_up = cos(th1)*cos(th2_up+th3_up)*R[0,2]+sin(th1)*cos(th2_up+th3_up)*R[1,2]+sin(th2_up+th3_up)*R[2,2]
-        r23 = sin(th1)*R[0,2]-cos(th1)*R[1,2]
-        r31_up = cos(th1)*sin(th2_up+th3_up)*R[0,0]+sin(th1)*sin(th2_up+th3_up)*R[1,0]-cos(th2_up+th3_up)*R[2,0]
-        r32_up = cos(th1)*sin(th2_up+th3_up)*R[0,1]+sin(th1)*sin(th2_up+th3_up)*R[1,1]-cos(th2_up+th3_up)*R[2,1]
-        r33_up = cos(th1)*sin(th2_up+th3_up)*R[0,2]+sin(th1)*sin(th2_up+th3_up)*R[1,2]-cos(th2_up+th3_up)*R[2,2]
-
-        r11_down = cos(th1)*cos(th2_down+th3_down)*R[0,0]+sin(th1)*cos(th2_down+th3_down)*R[1,0]+sin(th2_down+th3_down)*R[2,0]
-        r21 = sin(th1)*R[0,0]-cos(th1)*R[1,0]
-        r13_down = cos(th1)*cos(th2_down+th3_down)*R[0,2]+sin(th1)*cos(th2_down+th3_down)*R[1,2]+sin(th2_down+th3_down)*R[2,2]
-        r23 = sin(th1)*R[0,2]-cos(th1)*R[1,2]
-        r31_down = cos(th1)*sin(th2_down+th3_down)*R[0,0]+sin(th1)*sin(th2_down+th3_down)*R[1,0]-cos(th2_down+th3_down)*R[2,0]
-        r32_down = cos(th1)*sin(th2_down+th3_down)*R[0,1]+sin(th1)*sin(th2_down+th3_down)*R[1,1]-cos(th2_down+th3_down)*R[2,1]
-        r33_down = cos(th1)*sin(th2_down+th3_down)*R[0,2]+sin(th1)*sin(th2_down+th3_down)*R[1,2]-cos(th2_down+th3_down)*R[2,2]
-
-        # NOTE: Don't forget about the alternate configuration (negative sqrt choice)
-        th5_up = atan2(sqrt(1 - r33_up**2), r33_up)
-        th5_down = atan2(sqrt(1 - r33_down**2), r33_down)
-
-        if sin(th5_up) == 0 and cos(th5_up) == 1:
-            th5_up = 0
-            th4_up = 0
-            th6_up = atan2(r21, r11_up)
-            th5_down = 0
-            th4_down = 0
-            th6_down = atan2(r21, r11_down)
-        elif sin(th5_up) == 0 and cos(th5_up) == -1:
-            th5_up = 0
-            th4_up = 0
-            th6_up = atan2(-r21, -r11_up)
-            th5_down = 0
-            th4_down = 0
-            th6_down = atan2(-r21, -r11_down)
-        else:
-            th4_up = atan2(r23, r13_up)
-            th6_up = atan2(r32_up, -r31_up)
-            th4_down = atan2(r23, r13_down)
-            th6_down = atan2(r32_down, -r31_down)
-
-        # # NOTE: While currently unused, this alt might be useful when we limit ourselves to 180 deg rotation
-        # th5_alt = atan2(-sqrt(1 - (sin(th1)*R[0,2] - cos(th1)*R[1,2])**2), sin(th1)*R[0,2]-cos(th1)*R[1,2]) + np.pi/2
-        # th5 = np.pi/2 - atan2(sqrt(1 - (sin(th1)*R[0,2] - cos(th1)*R[1,2])**2), sin(th1)*R[0,2]-cos(th1)*R[1,2])
-        #
-        # if sin(th5) == 0 and cos(th5) == 1:
-        #     # Singular configuration
-        #     th4_up, th4_down = 0, 0
-        #     th6_up = atan2(-cos(th1)*sin(th2_up+th3_up)*R[0,0]-sin(th1)*sin(th2_up+th3_up)*R[1,0]+cos(th2_up+th3_up)*R[2,0], cos(th1)*cos(th2_up+th3_up)*R[0,0]+sin(th1)*cos(th2_up+th3_up)*R[1,0]+sin(th2_up+th3_up)*R[2,0]) # Eqn 2.36 + Eqn 5.28/9
-        #     th6_down = atan2(-cos(th1)*sin(th2_down+th3_down)*R[0,0]-sin(th1)*sin(th2_down+th3_down)*R[1,0]+cos(th2_down+th3_down)*R[2,0], cos(th1)*cos(th2_down+th3_down)*R[0,0]+sin(th1)*cos(th2_down+th3_down)*R[1,0]+sin(th2_down+th3_down)*R[2,0]) # Eqn 2.36 + Eqn 5.28/9
-        # elif sin(th5) == 0 and cos(th5) == -1:
-        #     # Singular configuration
-        #     th4_up, th4_down = 0, 0
-        #     th6_up = -atan2(-(cos(th1)*cos(th2_up+th3_up)*R[0,1]+sin(th1)*cos(th2_up+th3_up)*R[1,1]+sin(th2_up+th3_up)*R[2,1]), -(cos(th1)*cos(th2_up+th3_up)*R[0,0]+sin(th1)*cos(th2_up+th3_up)*R[1,0]+sin(th2_up+th3_up)*R[2,0]))
-        #     th6_down = -atan2(-(cos(th1)*cos(th2_down+th3_down)*R[0,1]+sin(th1)*cos(th2_down+th3_down)*R[1,1]+sin(th2_down+th3_down)*R[2,1]), -(cos(th1)*cos(th2_down+th3_down)*R[0,0]+sin(th1)*cos(th2_down+th3_down)*R[1,0]+sin(th2_down+th3_down)*R[2,0]))
-        # else:
-        #     # Standard situation
-        #     th4_up = atan2(-cos(th1)*sin(th2_up+th3_up)*R[0,2]-sin(th1)*sin(th2_up+th3_up)*R[1,2]+cos(th2_up+th3_up)*R[2,2], cos(th1)*cos(th2_up+th3_up)*R[0,2]+sin(th1)*cos(th2_up+th3_up)*R[1,2]+sin(th2_up+th3_up)*R[2,2])
-        #     th4_down = atan2(-cos(th1)*sin(th2_down+th3_down)*R[0,2]-sin(th1)*sin(th2_down+th3_down)*R[1,2]+cos(th2_down+th3_down)*R[2,2], cos(th1)*cos(th2_down+th3_down)*R[0,2]+sin(th1)*cos(th2_down+th3_down)*R[1,2]+sin(th2_down+th3_down)*R[2,2])
-        #     th6_up = atan2(sin(th1)*R[0,1]-cos(th1)*R[1,1], -sin(th1)*R[0,0]+cos(th1)*R[1,0])
-        #     th6_down = th6_up
-        #     # th6_up = np.pi/2 - th3_up
-
-
-        
-        return IKResult(True, solutions={"up": [th1, th2_up, th3_up, th4_up, th5_up, th6_up], "down": [th1, th2_down, th3_down, th4_down, th5_down, th6_down], "up_alt": [th1_alt, th2_up, th3_up, th4_up, th5_up, th6_up], "down_alt": [th1_alt, th2_down, th3_down, th4_down, th5_down, th6_down]})
+        return IKResult(True, solutions={"up": [th1, th2_up, th3_up, th4_up, th5_up, th6_up], "down": [th1, th2_down, th3_down, th4_down, th5_down, th6_down]})
