@@ -3,7 +3,7 @@ import kinematics
 
 class RobotArm:
     
-    def __init__(self, kinematics: kinematics.Kinematics, th: list[float]):
+    def __init__(self, kinematics: kinematics.Kinematics, th: list[float], joint_limits):
         """
         Parameters
         ----------
@@ -16,17 +16,13 @@ class RobotArm:
         # Save parameters
         self.kinematics = kinematics
         self.th = th
+        self.joint_limits = joint_limits
 
         # Initialise link positions and coordinate axes by running forward kinematics
         self.update_link_positions()
         self.end_effector_pos = self.link_points[-1]
         # NOTE: Roll is around X, Pitch is around Y, Yaw is around Z
         self.end_effector_orient = (90, 0, 90)
-
-        # Initialise constraints 
-        self.joint_limits = [
-            (-np.pi, np.pi) * len(self.th)
-        ]
 
     def update_link_positions(self):
         # Specify the origins of the coordinate frames, given in terms of frame 0, when the robot is 
@@ -40,6 +36,16 @@ class RobotArm:
         self.frame_axes = np.array(frame_axes)
         self.link_points = np.array(link_points)
 
+    def validate_solution(self, thetas: list[float]) -> list[str]:
+        """Check robot-specific constraints on a candidate solution."""
+        errors = []
+
+        # Joint limits
+        for i, (theta, (lo, hi)) in enumerate(zip(thetas, self.joint_limits)):
+            if not (np.deg2rad(lo) <= theta <= np.deg2rad(hi)):
+                errors.append(f"Joint {i+1} out of range ({lo}, {hi}): {np.rad2deg(theta):.2f} deg")
+
+        return errors
 
     def set_end_effector_pos(self, x, y, z, rpy=None):
         """
@@ -66,40 +72,35 @@ class RobotArm:
                 self.end_effector_pos = old_end_effector_pos
                 self.end_effector_orient = old_end_effector_orient
             else:
-                # Generally, we choose the configuration that is closest to the previous one. When there is a large flip in th1, however, we choose the opposite, as this will be a more natural position
-                up_closer = abs(self.th[1] - result.solutions["down"][1]) > abs(self.th[1] - result.solutions["up"][1]) - 1
-                th_180_change = abs(self.th[0] - result.solutions["up"][0]) > 3 # it's in radians, remember
-                print(f"old_theta: {self.th[0]} new_theta: {result.solutions["up"][0]}")
-                if up_closer and th_180_change:
+                up_errors = self.validate_solution(result.solutions["up"])
+                down_errors = self.validate_solution(result.solutions["down"])
+                if len(up_errors) > 0 and len(down_errors) > 0:
+                    print("Both configurations invalid: ")
+                    up_errors.extend(down_errors)
+                    for err in up_errors:
+                        print(err)
+                    self.end_effector_pos = old_end_effector_pos
+                    self.end_effector_orient = old_end_effector_orient
+                elif len(down_errors) > 0:
+                    print("UP configuration chosen")
+                    self.th = result.solutions["up"]
+                    # Update the link positions via forward kinematics
+                    print(f"IK Thetas: {np.rad2deg(self.th)}\n")
+                    self.update_link_positions()
+                elif len(up_errors) > 0:
+                    print("DOWN configuration chosen")
                     self.th = result.solutions["down"]
-                    print("DOWN PICKED")
-                elif th_180_change:
-                    self.th = result.solutions["up"]
-                    print("TH180 and UP PICKED")
-                elif up_closer:
-                    self.th = result.solutions["up"]
-                    print("UP PICKED")
+                    # Update the link positions via forward kinematics
+                    print(f"IK Thetas: {np.rad2deg(self.th)}\n")
+                    self.update_link_positions()
                 else:
-                    self.th = result.solutions["down"]
-                    print("DOWN PICKED")
+                    print("Both configs valid, UP chosen")
+                    self.th = result.solutions["up"]
+                    # Update the link positions via forward kinematics
+                    print(f"IK Thetas: {np.rad2deg(self.th)}\n")
+                    self.update_link_positions()
 
-                # Update the link positions via forward kinematics
-                print(f"IK Thetas: {np.rad2deg(self.th)}")
-                self.update_link_positions()
+                print(f"EE is at: {self.end_effector_pos}, orientation: {self.end_effector_orient}")
         else:
             print("ERROR: z <= 0 - invalid position given")
 
-
-    # def choose_solution(self, thetas: )
-
-    def validate_solution(self, thetas: list[float], x: float, y: float, z: float) -> list[str]:
-        """Check robot-specific constraints on a candidate solution."""
-        errors = []
-
-        # Joint limits
-        for i, (theta, (lo, hi)) in enumerate(zip(thetas, self.joint_limits)):
-            if not (lo < theta <= hi):
-                errors.append(f"Joint {i+1} out of range: {theta:.2f} rad")
-
-
-        return errors
